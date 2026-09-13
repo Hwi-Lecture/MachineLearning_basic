@@ -1,5 +1,7 @@
 # 학생 배포용 zip(git archive)에서 제외할 강사/AI 작업용 파일
-AGENTS.md export-ignore
+/AGENTS.md export-ignore
 CLAUDE.md export-ignore
+follow_notebook.md export-ignore
+practice_notebook.md export-ignore
 .gitattributes export-ignore
 .claude/ export-ignore
