@@ -1,18 +1,21 @@
 # ============================================================================
 # 나만의 머신러닝 결과 대시보드 - 뼈대(skeleton) 템플릿
 #
-# 사용법:
-#   1. 터미널에서 실행: streamlit run dashboard_template.py
-#   2. 브라우저가 열리면 지금은 "예시 데이터"로 채워진 화면이 보입니다.
-#   3. 왼쪽 사이드바에서 페이지(EDA / 모델 학습 결과 / SHAP)를 선택하면
-#      화면이 바뀝니다. 페이지를 추가/삭제하려면 PAGES 딕셔너리를 수정하세요.
-#   4. 이 파일에서 "# TODO"라고 적힌 곳을 찾아, Continue 채팅창에
-#      "TODO(2)를 내 결과로 채워줘, 값은 이거야: ..." 처럼 요청하세요.
-#   5. 저장하면 브라우저 화면이 자동으로 새로고침됩니다.
+# 이 파일은 직접 채우는 파일이 아닙니다.
+#   1. 탐색·실험은 노트북(scratch.ipynb)과 experiments/*.py에서 진행합니다.
+#   2. experiments/*.py를 실행하면 AGENTS.md 규칙에 따라 AI가 그 결과를
+#      자동으로 이 파일에 반영합니다 (runs 리스트, 혼동행렬/잔차 플롯 등).
+#   3. 지금 보이는 값은 레이아웃 확인용 예시 데이터이며, 첫 실제 실험 결과가
+#      들어오면 자동으로 지워지고 실제 값으로 바뀝니다.
+#
+# 확인 방법: 터미널에서 streamlit run dashboard_template.py 를 실행하고
+# 왼쪽 사이드바에서 페이지(EDA/전처리 결과 / 모델 학습 결과)를 선택하세요.
+# 매 실험마다 열어볼 필요는 없고, 여러 번 실험이 쌓여서 결과를 비교하고
+# 싶을 때 열어보면 됩니다. 페이지를 추가/삭제하려면 PAGES 딕셔너리를 수정하세요.
 #
 # 이 대시보드는 개선사이클(문제정의 → Baseline → 지표확인 → Error Analysis
 # → 원인분석 → XAI → 개선가설 → 개선 → 재평가 → 반복)의 결과를 페이지별로
-# 정리하기 위한 뼈대입니다. 필요 없는 페이지는 지워도 되고, 순서를 바꿔도 됩니다.
+# 정리하기 위한 뼈대입니다. 필요 없는 페이지/섹션은 지워도 되고, 순서를 바꿔도 됩니다.
 # ============================================================================
 
 import numpy as np
@@ -68,11 +71,11 @@ metric_keys = [c for c in runs_df.columns if c not in ("name", "설명")]
 
 
 # ============================================================================
-# 페이지 1: EDA (탐색적 데이터 분석)
+# 페이지 1: EDA/전처리 결과
 # ============================================================================
 def page_eda() -> None:
-    st.title("🔎 EDA (탐색적 데이터 분석)")
-    st.caption("모델을 만들기 전에 데이터의 분포와 관계를 먼저 살펴보는 페이지입니다.")
+    st.title("🔎 EDA/전처리 결과")
+    st.caption("모델을 만들기 전에 데이터의 분포와 관계, 전처리 전후 변화를 살펴보는 페이지입니다.")
 
     st.subheader("데이터 미리보기")
     st.dataframe(data.head(20), use_container_width=True)
@@ -158,6 +161,31 @@ def page_model_results() -> None:
 
     st.divider()
 
+    st.header("🧠 모델은 무엇을 보고 판단했나요? (SHAP)")
+    st.caption("변수 중요도와 개별 예측에 대한 설명을 확인하는 영역입니다.")
+
+    st.subheader("전체 변수 중요도")
+    # TODO(6): 실제 SHAP 값(mean |SHAP value|) 또는 feature_importances_로 바꿔주세요.
+    feature_importance = pd.DataFrame(
+        {"변수": ["변수 A", "변수 B", "변수 C", "변수 D"], "중요도": [0.40, 0.30, 0.20, 0.10]}
+    ).sort_values("중요도")
+    fig = px.bar(feature_importance, x="중요도", y="변수", orientation="h")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("개별 샘플 설명")
+    # TODO(7): 실제 SHAP waterfall/force plot으로 바꿔주세요. (예: shap.plots.waterfall)
+    sample_idx = st.slider("확인할 샘플 번호", 0, len(data) - 1, 0)
+    st.dataframe(data.iloc[[sample_idx]], use_container_width=True)
+
+    contrib = pd.DataFrame(
+        {"변수": ["변수 A", "변수 B", "변수 C", "변수 D"], "기여도": [0.25, -0.10, 0.05, -0.02]}
+    ).sort_values("기여도")
+    fig = px.bar(contrib, x="기여도", y="변수", orientation="h", color="기여도", color_continuous_scale="RdBu")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("양수(파란색)는 예측을 높이는 방향, 음수(빨간색)는 예측을 낮추는 방향으로 기여했다는 뜻이에요.")
+
+    st.divider()
+
     st.header("⚖️ Before / After 비교")
     col_a, col_b = st.columns(2)
     with col_a:
@@ -184,42 +212,11 @@ def page_model_results() -> None:
 
 
 # ============================================================================
-# 페이지 3: SHAP (모델 설명력, XAI)
-# ============================================================================
-def page_shap() -> None:
-    st.title("🧠 SHAP (모델은 무엇을 보고 판단했나요?)")
-    st.caption("변수 중요도와 개별 예측에 대한 설명을 확인하는 페이지입니다.")
-
-    st.subheader("전체 변수 중요도")
-    # TODO(6): 실제 SHAP 값(mean |SHAP value|) 또는 feature_importances_로 바꿔주세요.
-    feature_importance = pd.DataFrame(
-        {"변수": ["변수 A", "변수 B", "변수 C", "변수 D"], "중요도": [0.40, 0.30, 0.20, 0.10]}
-    ).sort_values("중요도")
-    fig = px.bar(feature_importance, x="중요도", y="변수", orientation="h")
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.divider()
-
-    st.subheader("개별 샘플 설명")
-    # TODO(7): 실제 SHAP waterfall/force plot으로 바꿔주세요. (예: shap.plots.waterfall)
-    sample_idx = st.slider("확인할 샘플 번호", 0, len(data) - 1, 0)
-    st.dataframe(data.iloc[[sample_idx]], use_container_width=True)
-
-    contrib = pd.DataFrame(
-        {"변수": ["변수 A", "변수 B", "변수 C", "변수 D"], "기여도": [0.25, -0.10, 0.05, -0.02]}
-    ).sort_values("기여도")
-    fig = px.bar(contrib, x="기여도", y="변수", orientation="h", color="기여도", color_continuous_scale="RdBu")
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("양수(파란색)는 예측을 높이는 방향, 음수(빨간색)는 예측을 낮추는 방향으로 기여했다는 뜻이에요.")
-
-
-# ============================================================================
 # 사이드바 내비게이션
 # ============================================================================
 PAGES = {
-    "EDA": page_eda,
+    "EDA/전처리 결과": page_eda,
     "모델 학습 결과": page_model_results,
-    "SHAP": page_shap,
 }
 
 st.sidebar.header("📌 페이지 선택")
@@ -229,9 +226,9 @@ st.sidebar.divider()
 st.sidebar.subheader("빠른 가이드")
 st.sidebar.markdown(
     """
-    - **데이터셋**: TODO(1) 데이터셋 이름
-    - **문제 유형**: TODO(1) 분류(Classification) 또는 회귀(Regression)
-    - **평가 지표**: TODO(1) 이 문제에서 가장 중요하게 볼 지표
+    - **데이터셋**: (experiments 실행 시 자동으로 채워집니다)
+    - **문제 유형**: (experiments 실행 시 자동으로 채워집니다)
+    - **평가 지표**: (experiments 실행 시 자동으로 채워집니다)
     """
 )
 
