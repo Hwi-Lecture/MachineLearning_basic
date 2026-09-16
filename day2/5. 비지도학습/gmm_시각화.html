@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>GMM 실습 도구</title>
+<style>
+  body { font-family: -apple-system, "Malgun Gothic", sans-serif; background: #0f0f1a; color: #eee; display:flex; justify-content:center; padding: 30px 12px; }
+  .wrap { max-width: 640px; width: 100%; }
+  h2 { font-size: 18px; margin-bottom: 4px; }
+  .sub { font-size: 13px; color: #999; margin-bottom: 16px; }
+  .controls { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom: 14px; padding: 12px 14px; background: #1b1b2e; border-radius: 10px; }
+  .controls label { font-size:14px; display:flex; align-items:center; gap:6px; }
+  button { padding:9px 14px; border-radius:8px; border:none; color:white; font-size:13px; cursor:pointer; }
+  #btnInit { background:#6d4aff; }
+  #btnE { background:#3ec6c6; }
+  #btnM { background:#ff6d9d; }
+  #btnAuto { background:#444; }
+  #status { font-size:13px; color:#bbb; margin-bottom:10px; min-height:18px; }
+  svg { width:100%; background:#fff; border-radius:10px; cursor:pointer; }
+  #iterCount { color:#fff; font-weight:600; }
+  .footer { font-size:12px; color:#777; margin-top:10px; }
+  .panel { margin-top:14px; padding:12px 14px; background:#1b1b2e; border-radius:10px; }
+  .panel-title { font-size:13px; color:#ccc; margin-bottom:8px; }
+  .bar-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:12px; color:#ddd; }
+  .bar-track { flex:1; height:10px; background:#2a2a40; border-radius:6px; overflow:hidden; }
+  .bar-fill { height:100%; border-radius:6px; }
+  .bar-pct { width:44px; text-align:right; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2>GMM (Gaussian Mixture Model) 실습</h2>
+  <div class="sub">고객별 원피스 구매 개수(x) / 스커트 구매 개수(y) — 같은 고객 데이터, 소속 확률로 표현</div>
+
+  <div class="controls">
+    <label>K = <span id="kval">3</span>
+      <input id="kslider" type="range" min="2" max="4" value="3" step="1" style="width:100px;">
+    </label>
+    <button id="btnInit">1. 파라미터 랜덤 초기화</button>
+    <button id="btnE">2. 소속 확률 계산 (E-step)</button>
+    <button id="btnM">3. 파라미터 재계산 (M-step)</button>
+    <button id="btnAuto">수렴까지 자동 실행</button>
+  </div>
+
+  <div id="status">K를 선택하고 "파라미터 랜덤 초기화"부터 눌러보세요.</div>
+
+  <svg id="svg" viewBox="0 0 500 340"></svg>
+
+  <div class="footer">반복 횟수: <span id="iterCount">0</span> · 점을 클릭하면 소속 확률을 확인할 수 있습니다</div>
+  <div class="footer" style="margin-top:4px;">※ 점선 원은 군집의 경계가 아니라 표준편차(퍼짐 정도)입니다. 원 밖의 점도 그 군집에 속할 확률을 가집니다.</div>
+
+  <div class="panel">
+    <div class="panel-title" id="panelTitle">점을 클릭해서 소속 확률을 확인하세요</div>
+    <div id="bars"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const dataRaw = [
+    [1,1],[1,2],[2,1],[2,2],[1,0],
+    [7,1],[8,2],[7,2],[8,1],[9,2],
+    [1,8],[2,9],[1,7],[2,8],[2,7]
+  ];
+  const colors = ['#6d4aff','#3ec6c6','#ff6d9d','#ffb703'];
+  const margin = 40, plotW = 420, plotH = 260;
+  const pxPerUnit = plotW / 10;
+  const scaleX = v => margin + (v/10)*plotW;
+  const scaleY = v => margin + plotH - (v/10)*plotH;
+
+  let K = 3;
+  let means = [], variances = [], weights = [];
+  let resp = []; // responsibilities[i][k]
+  let iter = 0;
+  let autoTimer = null;
+  let selectedIdx = null;
+
+  const svg = document.getElementById('svg');
+  const statusEl = document.getElementById('status');
+  const iterEl = document.getElementById('iterCount');
+  const kSlider = document.getElementById('kslider');
+  const kVal = document.getElementById('kval');
+  const panelTitle = document.getElementById('panelTitle');
+  const barsEl = document.getElementById('bars');
+
+  function hexToRgb(hex){
+    const n = parseInt(hex.slice(1),16);
+    return [(n>>16)&255,(n>>8)&255,n&255];
+  }
+  function blendColor(probs){
+    let r=0,g=0,b=0;
+    probs.forEach((p,k)=>{
+      const [cr,cg,cb] = hexToRgb(colors[k]);
+      r += p*cr; g += p*cg; b += p*cb;
+    });
+    return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+  }
+
+  function gaussianPdf(point, mean, v){
+    const d2 = (point[0]-mean[0])**2 + (point[1]-mean[1])**2;
+    const coef = 1/(2*Math.PI*v);
+    return coef * Math.exp(-d2/(2*v));
+  }
+
+  function initParams(){
+    const idxs = new Set();
+    while(idxs.size < K){ idxs.add(Math.floor(Math.random()*dataRaw.length)); }
+    means = Array.from(idxs).map(i => [...dataRaw[i]]);
+    variances = new Array(K).fill(4);
+    weights = new Array(K).fill(1/K);
+    resp = [];
+    iter = 0;
+    selectedIdx = null;
+    render();
+    statusEl.textContent = '평균 ' + K + '개를 랜덤으로 뽑고, 분산은 초기값으로 설정했습니다. 이제 "소속 확률 계산"을 눌러보세요.';
+    panelTitle.textContent = '점을 클릭해서 소속 확률을 확인하세요';
+    barsEl.innerHTML = '';
+  }
+
+  function eStep(){
+    if(means.length===0){ statusEl.textContent = '먼저 파라미터를 초기화하세요.'; return; }
+    resp = dataRaw.map(p=>{
+      const raw = means.map((m,k)=> weights[k]*gaussianPdf(p,m,variances[k]));
+      const sum = raw.reduce((s,v)=>s+v,0) || 1e-9;
+      return raw.map(v=>v/sum);
+    });
+    render();
+    statusEl.textContent = '각 점이 각 분포에 속할 확률을 계산했습니다(색이 확률에 따라 섞여 보입니다). 이제 "파라미터 재계산"을 눌러보세요.';
+  }
+
+  function mStep(){
+    if(resp.length===0){ statusEl.textContent = '먼저 "소속 확률 계산"을 눌러 확률을 계산하세요.'; return false; }
+    let changed = false;
+    const N = dataRaw.length;
+    const newMeans = [], newVar = [], newWeights = [];
+    for(let k=0;k<K;k++){
+      const Nk = resp.reduce((s,r)=>s+r[k],0) || 1e-9;
+      const mx = dataRaw.reduce((s,p,i)=>s+resp[i][k]*p[0],0)/Nk;
+      const my = dataRaw.reduce((s,p,i)=>s+resp[i][k]*p[1],0)/Nk;
+      const v = Math.max(0.5, dataRaw.reduce((s,p,i)=>s+resp[i][k]*((p[0]-mx)**2+(p[1]-my)**2),0)/(2*Nk));
+      if(Math.abs(mx-means[k][0])>0.02 || Math.abs(my-means[k][1])>0.02 || Math.abs(v-variances[k])>0.05) changed = true;
+      newMeans.push([mx,my]);
+      newVar.push(v);
+      newWeights.push(Nk/N);
+    }
+    means = newMeans; variances = newVar; weights = newWeights;
+    iter++;
+    render();
+    if(!changed){
+      statusEl.textContent = '파라미터에 변화가 거의 없습니다. 수렴 완료 (반복 ' + iter + '회).';
+    } else {
+      statusEl.textContent = '평균/분산/가중치를 재계산했습니다. 다시 "소속 확률 계산"부터 반복하세요.';
+    }
+    return changed;
+  }
+
+  function autoRun(){
+    if(autoTimer){ clearInterval(autoTimer); autoTimer=null; }
+    if(means.length===0) initParams();
+    let steps = 0;
+    autoTimer = setInterval(()=>{
+      eStep();
+      const changed = mStep();
+      steps++;
+      if(!changed || steps>15){
+        clearInterval(autoTimer); autoTimer=null;
+      }
+    }, 700);
+  }
+
+  function showPointInfo(i){
+    selectedIdx = i;
+    const p = dataRaw[i];
+    panelTitle.textContent = '선택한 고객 — 원피스 ' + p[0] + '개 / 스커트 ' + p[1] + '개';
+    if(resp.length===0){
+      barsEl.innerHTML = '<div style="font-size:12px;color:#888;">아직 확률을 계산하지 않았습니다. "소속 확률 계산"을 먼저 눌러보세요.</div>';
+      return;
+    }
+    const probs = resp[i];
+    barsEl.innerHTML = probs.map((p2,k)=>{
+      const pct = Math.round(p2*100);
+      return `<div class="bar-row"><span style="width:60px;color:${colors[k]}">군집 ${k+1}</span><div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${colors[k]};"></div></div><span class="bar-pct">${pct}%</span></div>`;
+    }).join('');
+  }
+
+  function render(){
+    iterEl.textContent = iter;
+    let s = '';
+    s += `<line x1="${margin}" y1="${margin+plotH}" x2="${margin+plotW}" y2="${margin+plotH}" stroke="#ccc" stroke-width="1"/>`;
+    s += `<line x1="${margin}" y1="${margin}" x2="${margin}" y2="${margin+plotH}" stroke="#ccc" stroke-width="1"/>`;
+    s += `<text x="${margin+plotW/2}" y="${margin+plotH+28}" font-size="12" fill="#888" text-anchor="middle">원피스 구매 개수</text>`;
+    s += `<text x="14" y="${margin+plotH/2}" font-size="12" fill="#888" text-anchor="middle" transform="rotate(-90,14,${margin+plotH/2})">스커트 구매 개수</text>`;
+
+    // gaussian spread circles
+    means.forEach((m,k)=>{
+      const cx = scaleX(m[0]), cy = scaleY(m[1]);
+      const r = Math.min(140, Math.max(14, Math.sqrt(variances[k]) * pxPerUnit));
+      s += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${colors[k]}" opacity="0.12"/>`;
+      s += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${colors[k]}" stroke-width="1.5" stroke-dasharray="4,3"/>`;
+      s += `<line x1="${cx-7}" y1="${cy-7}" x2="${cx+7}" y2="${cy+7}" stroke="${colors[k]}" stroke-width="3"/>`;
+      s += `<line x1="${cx-7}" y1="${cy+7}" x2="${cx+7}" y2="${cy-7}" stroke="${colors[k]}" stroke-width="3"/>`;
+    });
+
+    dataRaw.forEach((p,i)=>{
+      const cx = scaleX(p[0]), cy = scaleY(p[1]);
+      const col = resp.length ? blendColor(resp[i]) : '#bbbbbb';
+      const strokeCol = selectedIdx===i ? '#111' : 'white';
+      const strokeW = selectedIdx===i ? 3 : 1.5;
+      s += `<circle data-role="point" data-idx="${i}" cx="${cx}" cy="${cy}" r="8" fill="${col}" stroke="${strokeCol}" stroke-width="${strokeW}"/>`;
+    });
+
+    svg.innerHTML = s;
+  }
+
+  svg.addEventListener('click', (e)=>{
+    const t = e.target;
+    if(t.tagName==='circle' && t.dataset.role==='point'){
+      showPointInfo(parseInt(t.dataset.idx));
+      render();
+      showPointInfo(parseInt(t.dataset.idx));
+    }
+  });
+
+  kSlider.addEventListener('input', (e)=>{ K = parseInt(e.target.value); kVal.textContent = K; });
+  document.getElementById('btnInit').addEventListener('click', ()=>{ if(autoTimer){clearInterval(autoTimer);autoTimer=null;} initParams(); });
+  document.getElementById('btnE').addEventListener('click', eStep);
+  document.getElementById('btnM').addEventListener('click', mStep);
+  document.getElementById('btnAuto').addEventListener('click', autoRun);
+
+  render();
+})();
+</script>
+</body>
+</html>

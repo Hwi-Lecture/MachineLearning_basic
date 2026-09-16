@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>K-means 실습 도구</title>
+<style>
+  body { font-family: -apple-system, "Malgun Gothic", sans-serif; background: #0f0f1a; color: #eee; display:flex; justify-content:center; padding: 30px 12px; }
+  .wrap { max-width: 640px; width: 100%; }
+  h2 { font-size: 18px; margin-bottom: 4px; }
+  .sub { font-size: 13px; color: #999; margin-bottom: 16px; }
+  .controls { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom: 14px; padding: 12px 14px; background: #1b1b2e; border-radius: 10px; }
+  .controls label { font-size:14px; display:flex; align-items:center; gap:6px; }
+  button { padding:9px 14px; border-radius:8px; border:none; color:white; font-size:13px; cursor:pointer; }
+  #btnInit { background:#6d4aff; }
+  #btnAssign { background:#3ec6c6; }
+  #btnUpdate { background:#ff6d9d; }
+  #btnAuto { background:#444; }
+  #status { font-size:13px; color:#bbb; margin-bottom:10px; min-height:18px; }
+  svg { width:100%; background:#fff; border-radius:10px; }
+  #iterCount { color:#fff; font-weight:600; }
+  .footer { font-size:12px; color:#777; margin-top:10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2>K-means 클러스터링 실습</h2>
+  <div class="sub">고객별 원피스 구매 개수(x) / 스커트 구매 개수(y)</div>
+
+  <div class="controls">
+    <label>K = <span id="kval">2</span>
+      <input id="kslider" type="range" min="1" max="4" value="2" step="1" style="width:100px;">
+    </label>
+    <button id="btnInit">1. 중심점 랜덤 초기화</button>
+    <button id="btnAssign">2. 가까운 중심에 할당</button>
+    <button id="btnUpdate">3. 중심 재계산</button>
+    <button id="btnAuto">수렴까지 자동 실행</button>
+  </div>
+
+  <div id="status">K를 선택하고 "중심점 랜덤 초기화"부터 눌러보세요.</div>
+
+  <svg id="svg" viewBox="0 0 500 340"></svg>
+
+  <div class="footer">반복 횟수: <span id="iterCount">0</span></div>
+</div>
+
+<script>
+(function(){
+  const dataRaw = [
+    [1,1],[1,2],[2,1],[2,2],[1,0],
+    [7,1],[8,2],[7,2],[8,1],[9,2],
+    [1,8],[2,9],[1,7],[2,8],[2,7]
+  ];
+  const colors = ['#6d4aff','#3ec6c6','#ff6d9d','#ffb703'];
+  const margin = 40, plotW = 420, plotH = 260;
+  const scaleX = v => margin + (v/10)*plotW;
+  const scaleY = v => margin + plotH - (v/10)*plotH;
+
+  let K = 2;
+  let centroids = [];
+  let assignments = new Array(dataRaw.length).fill(-1);
+  let iter = 0;
+  let autoTimer = null;
+
+  const svg = document.getElementById('svg');
+  const statusEl = document.getElementById('status');
+  const iterEl = document.getElementById('iterCount');
+  const kSlider = document.getElementById('kslider');
+  const kVal = document.getElementById('kval');
+
+  function dist(a,b){ return Math.hypot(a[0]-b[0], a[1]-b[1]); }
+
+  function randomInitCentroids(){
+    const idxs = new Set();
+    while(idxs.size < K){ idxs.add(Math.floor(Math.random()*dataRaw.length)); }
+    centroids = Array.from(idxs).map(i => [...dataRaw[i]]);
+    assignments = new Array(dataRaw.length).fill(-1);
+    iter = 0;
+    render();
+    statusEl.textContent = '중심점 ' + K + '개를 랜덤으로 뽑았습니다. 이제 "가까운 중심에 할당"을 눌러보세요.';
+  }
+
+  function assignStep(){
+    if(centroids.length === 0){ statusEl.textContent = '먼저 중심점을 초기화하세요.'; return; }
+    for(let i=0;i<dataRaw.length;i++){
+      let best=0, bestD=Infinity;
+      for(let c=0;c<centroids.length;c++){
+        const d = dist(dataRaw[i], centroids[c]);
+        if(d<bestD){bestD=d; best=c;}
+      }
+      assignments[i]=best;
+    }
+    render();
+    statusEl.textContent = '각 점을 가장 가까운 중심에 할당했습니다. 이제 "중심 재계산"을 눌러보세요.';
+  }
+
+  function updateStep(){
+    if(assignments.every(a=>a===-1)){ statusEl.textContent = '먼저 "가까운 중심에 할당"을 눌러 할당을 진행하세요.'; return false; }
+    let changed = false;
+    const newCentroids = centroids.map((c, ci) => {
+      const members = dataRaw.filter((_,i)=>assignments[i]===ci);
+      if(members.length===0) return c;
+      const mx = members.reduce((s,p)=>s+p[0],0)/members.length;
+      const my = members.reduce((s,p)=>s+p[1],0)/members.length;
+      if(Math.abs(mx-c[0])>0.01 || Math.abs(my-c[1])>0.01) changed = true;
+      return [mx,my];
+    });
+    centroids = newCentroids;
+    iter++;
+    render();
+    if(!changed){
+      statusEl.textContent = '중심 위치에 변화가 없습니다. 수렴 완료 (반복 ' + iter + '회).';
+    } else {
+      statusEl.textContent = '중심을 재계산했습니다. 다시 "가까운 중심에 할당"부터 반복하세요.';
+    }
+    return changed;
+  }
+
+  function autoRun(){
+    if(autoTimer){ clearInterval(autoTimer); autoTimer=null; }
+    if(centroids.length===0) randomInitCentroids();
+    let steps = 0;
+    autoTimer = setInterval(()=>{
+      assignStep();
+      const changed = updateStep();
+      steps++;
+      if(!changed || steps>15){
+        clearInterval(autoTimer); autoTimer=null;
+      }
+    }, 700);
+  }
+
+  function render(){
+    iterEl.textContent = iter;
+    let svgContent = '';
+    svgContent += `<line x1="${margin}" y1="${margin+plotH}" x2="${margin+plotW}" y2="${margin+plotH}" stroke="#ccc" stroke-width="1"/>`;
+    svgContent += `<line x1="${margin}" y1="${margin}" x2="${margin}" y2="${margin+plotH}" stroke="#ccc" stroke-width="1"/>`;
+    svgContent += `<text x="${margin+plotW/2}" y="${margin+plotH+28}" font-size="12" fill="#888" text-anchor="middle">원피스 구매 개수</text>`;
+    svgContent += `<text x="14" y="${margin+plotH/2}" font-size="12" fill="#888" text-anchor="middle" transform="rotate(-90,14,${margin+plotH/2})">스커트 구매 개수</text>`;
+
+    dataRaw.forEach((p,i)=>{
+      const cx = scaleX(p[0]), cy = scaleY(p[1]);
+      const col = assignments[i]>=0 ? colors[assignments[i]] : '#bbbbbb';
+      svgContent += `<circle cx="${cx}" cy="${cy}" r="7" fill="${col}" stroke="white" stroke-width="1.5"/>`;
+    });
+
+    centroids.forEach((c,ci)=>{
+      const cx = scaleX(c[0]), cy = scaleY(c[1]);
+      const col = colors[ci];
+      svgContent += `<line x1="${cx-8}" y1="${cy-8}" x2="${cx+8}" y2="${cy+8}" stroke="${col}" stroke-width="3"/>`;
+      svgContent += `<line x1="${cx-8}" y1="${cy+8}" x2="${cx+8}" y2="${cy-8}" stroke="${col}" stroke-width="3"/>`;
+      svgContent += `<circle cx="${cx}" cy="${cy}" r="12" fill="none" stroke="${col}" stroke-width="2" stroke-dasharray="3,2"/>`;
+    });
+
+    svg.innerHTML = svgContent;
+  }
+
+  kSlider.addEventListener('input', (e)=>{
+    K = parseInt(e.target.value);
+    kVal.textContent = K;
+  });
+  document.getElementById('btnInit').addEventListener('click', ()=>{ if(autoTimer){clearInterval(autoTimer);autoTimer=null;} randomInitCentroids(); });
+  document.getElementById('btnAssign').addEventListener('click', assignStep);
+  document.getElementById('btnUpdate').addEventListener('click', updateStep);
+  document.getElementById('btnAuto').addEventListener('click', autoRun);
+
+  render();
+})();
+</script>
+</body>
+</html>
